@@ -230,6 +230,7 @@ app.post('/api/captcha', async (req, res) => {
     }
 });
 
+
 app.post('/api/case-data', async (req, res) => {
     const {
         districtBaseUrl,
@@ -246,7 +247,7 @@ app.post('/api/case-data', async (req, res) => {
 
     // Basic validation
     if (!districtBaseUrl || !cookies || !estCode || !litigantName || !regYear || !scid || !appTokenName || !appTokenValue || !captchaValue) {
-       return res.status(400).json({ error: 'Missing required parameters' });
+        return res.status(400).json({ error: 'Missing required parameters' });
     }
 
     const ajaxUrl = `${districtBaseUrl}/wp-admin/admin-ajax.php`;
@@ -287,14 +288,65 @@ app.post('/api/case-data', async (req, res) => {
             }
         });
 
-        // The response should be JSON
-        res.json(response.data);
+        const externalApiResponse = response.data; // This is the original JSON from the external API
+
+        // Check if the external API response has 'success: true' and 'data' field
+        if (externalApiResponse.success && typeof externalApiResponse.data === 'string') {
+            const htmlContent = externalApiResponse.data;
+
+            // Load the HTML content into cheerio
+            const $ = cheerio.load(htmlContent);
+
+            const cases = [];
+            $('table.data-table-1 tbody tr').each((index, element) => {
+                const serialNumber = $(element).find('td:nth-child(1)').text().trim();
+                const caseTypeNumberYear = $(element).find('td:nth-child(2)').text().trim();
+                const petitionerRespondentText = $(element).find('td:nth-child(3)').html(); // Use .html() to preserve <br>
+                
+                // Clean up petitioner/respondent text
+                const petitionerRespondent = petitionerRespondentText
+                    ? petitionerRespondentText.replace(/<br\s*\/?>/gi, ' | ').replace(/\s{2,}/g, ' ').trim()
+                    : '';
+
+                const viewButton = $(element).find('td:nth-child(4) a.viewCnrDetails');
+                const viewUrl = viewButton.attr('href'); // This might be 'javascript:void(0);'
+                const dataCno = viewButton.attr('data-cno'); // This holds the actual case number if present
+
+                cases.push({
+                    serialNumber: serialNumber,
+                    caseTypeNumberYear: caseTypeNumberYear,
+                    petitionerRespondent: petitionerRespondent,
+                    viewDetails: {
+                        url: viewUrl,
+                        caseNumberOnly: dataCno // The data-cno attribute holds the specific case number
+                    }
+                });
+            });
+
+            // Return the parsed JSON data
+            res.json({
+                success: true,
+                parsedCases: cases,
+                totalCases: parseInt($('#UPLK16').attr('data-total-cases')), // Extracting total cases from data attribute
+                nextPage: parseInt($('#UPLK16').attr('data-next-page')) // Extracting next page from data attribute
+            });
+
+        } else {
+            // If the external API didn't return expected structure or success: false
+            res.status(500).json({
+                error: 'External API response was not successful or data format was unexpected.',
+                externalResponse: externalApiResponse // Include the raw response for debugging
+            });
+        }
 
     } catch (error) {
-        console.error('Error fetching case data:', error.response ? error.response.data : error.message);
-        res.status(500).json({ error: 'Failed to fetch case data', details: error.message });
+        console.error('Error fetching or parsing case data:', error.response ? error.response.data : error.message);
+        res.status(500).json({ error: 'Failed to fetch or parse case data', details: error.message });
     }
 });
+
+// ... (rest of your app.js)
+
 
 app.post('/api/case-details-by-cino', async (req, res) => {
     const { districtBaseUrl, cookies, cino } = req.body;
@@ -333,15 +385,155 @@ app.post('/api/case-details-by-cino', async (req, res) => {
             }
         });
 
-        // The response should be JSON containing case details
-        res.json(response.data);
+        const htmlData = response.data.data; // Access the HTML string from the 'data' field
+        const $ = cheerio.load(htmlData); // Load the HTML into cheerio
+
+        const caseDetails = {};
+
+        // Parse Case Details Table
+        const caseDetailsTable = $('.distTableContent table.data-table-1').first();
+        if (caseDetailsTable.length) {
+            const headers = [];
+            caseDetailsTable.find('thead th').each((i, el) => {
+                headers.push($(el).text().trim().replace('<strong>', '').replace('</strong>', ''));
+            });
+            const values = [];
+            caseDetailsTable.find('tbody td').each((i, el) => {
+                values.push($(el).text().trim());
+            });
+
+            headers.forEach((header, index) => {
+                const key = header.toLowerCase().replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_|_$/g, '');
+                caseDetails[key] = values[index];
+            });
+        }
+
+        // Parse Case Status Table
+        const caseStatusTable = $('.distTableContent table.data-table-1').eq(1); // Second table
+        if (caseStatusTable.length) {
+            const headers = [];
+            caseStatusTable.find('thead th').each((i, el) => {
+                headers.push($(el).text().trim().replace(/[\t\r\n]+/g, ' ').trim()); // Clean up extra spaces/tabs/newlines
+            });
+            const values = [];
+            caseStatusTable.find('tbody td').each((i, el) => {
+                values.push($(el).text().trim());
+            });
+
+            headers.forEach((header, index) => {
+                const key = header.toLowerCase().replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_|_$/g, '');
+                if (values[index]) {
+                    caseDetails[key] = values[index];
+                }
+            });
+        }
+
+        // Parse Petitioner and Advocate
+        const petitioners = [];
+        $('.Petitioner ul li').each((i, el) => {
+            const text = $(el).text().trim();
+            const match = text.match(/(\d+\)\s*)(.*?)\s*Advocate\s*-\s*(.*)/i);
+            if (match) {
+                petitioners.push({
+                    name: match[2].trim(),
+                    advocate: match[3].trim()
+                });
+            } else {
+                petitioners.push({ name: text, advocate: null });
+            }
+        });
+        caseDetails.petitioners = petitioners;
+
+        // Parse Respondent and Advocate
+        const respondents = [];
+        $('.respondent ul li').each((i, el) => {
+            const text = $(el).text().trim();
+            const match = text.match(/(\d+\)\s*)(.*?)\s*(?:Advocate\s*-\s*(.*))?/i); // Make advocate optional
+            if (match) {
+                respondents.push({
+                    name: match[2].trim(),
+                    advocate: match[3] ? match[3].trim() : null
+                });
+            } else {
+                respondents.push({ name: text, advocate: null });
+            }
+        });
+        caseDetails.respondents = respondents;
+
+        // Parse Acts Section
+        const actsTable = $('div.border.box.bg-white').nextAll('div').first().find('table'); // Assumed structure based on screenshot
+        if (actsTable.length) {
+            const actHeaders = [];
+            actsTable.find('thead th').each((i, el) => {
+                actHeaders.push($(el).text().trim());
+            });
+            const actValues = [];
+            actsTable.find('tbody td').each((i, el) => {
+                actValues.push($(el).text().trim());
+            });
+
+            caseDetails.acts = {};
+            if (actHeaders.length === actValues.length) {
+                actHeaders.forEach((header, index) => {
+                    const key = header.toLowerCase().replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_|_$/g, '');
+                    caseDetails.acts[key] = actValues[index];
+                });
+            }
+        }
+
+        // Parse FIR Details Section
+        const firDetailsTable = $('div.border.box.bg-white').nextAll('div').eq(1).find('table'); // Assumed structure based on screenshot
+        if (firDetailsTable.length) {
+            const firHeaders = [];
+            firDetailsTable.find('thead th').each((i, el) => {
+                firHeaders.push($(el).text().trim());
+            });
+            const firValues = [];
+            firDetailsTable.find('tbody td').each((i, el) => {
+                firValues.push($(el).text().trim());
+            });
+
+            caseDetails.fir_details = {};
+            if (firHeaders.length === firValues.length) {
+                firHeaders.forEach((header, index) => {
+                    const key = header.toLowerCase().replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_|_$/g, '');
+                    caseDetails.fir_details[key] = firValues[index];
+                });
+            }
+        }
+
+        // Parse Case History Section
+        const caseHistoryTable = $('div.border.box.bg-white').nextAll('div').eq(2).find('table'); // Assumed structure based on screenshot
+        if (caseHistoryTable.length) {
+            const historyHeaders = [];
+            caseHistoryTable.find('thead th').each((i, el) => {
+                historyHeaders.push($(el).text().trim());
+            });
+
+            const historyEntries = [];
+            caseHistoryTable.find('tbody tr').each((i, row) => {
+                const rowData = {};
+                $(row).find('td').each((j, cell) => {
+                    const key = historyHeaders[j].toLowerCase().replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_|_$/g, '');
+                    rowData[key] = $(cell).text().trim();
+                });
+                historyEntries.push(rowData);
+            });
+            caseDetails.case_history = historyEntries;
+        }
+
+
+        // Send the structured JSON response
+        res.json({
+            success: true,
+            caseDetails: caseDetails
+        });
 
     } catch (error) {
-        console.error('Error fetching case details by CINO:', error.response ? error.response.data : error.message);
-        res.status(500).json({ error: 'Failed to fetch case details by CINO', details: error.message });
+        console.error('Error fetching or parsing case details by CINO:', error.response ? error.response.data : error.message);
+        res.status(500).json({ error: 'Failed to fetch or parse case details by CINO', details: error.message });
     }
 });
-
 app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
 });
