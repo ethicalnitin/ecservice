@@ -445,20 +445,35 @@ app.post('/api/case-details-by-cino', async (req, res) => {
         caseDetails.petitioners = petitioners;
 
         // Parse Respondent and Advocate
-        const respondents = [];
-        $('.respondent ul li').each((i, el) => {
-            const text = $(el).text().trim();
-            const match = text.match(/(\d+\)\s*)(.*?)\s*(?:Advocate\s*-\s*(.*))?/i); // Make advocate optional
-            if (match) {
-                respondents.push({
-                    name: match[2].trim(),
-                    advocate: match[3] ? match[3].trim() : null
-                });
-            } else {
-                respondents.push({ name: text, advocate: null });
+        // Parse Respondent and Advocate
+const respondents = [];
+$('.respondent ul li').each((i, el) => {
+    const nameText = $(el).find('p').first().text().trim(); // Get text from the <p> tag
+    let advocate = null;
+
+    // The nameText will be something like "1) rahul gupta"
+    const nameMatch = nameText.match(/(\d+\)\s*)(.*)/); // Simpler regex for just the name
+    let name = nameMatch ? nameMatch[2].trim() : nameText;
+
+    // Check for advocate text directly within the <li>, but outside the <p>
+    // This is more robust as it doesn't assume the advocate is in a <p>
+    $(el).contents().each((j, contentNode) => {
+        if (contentNode.type === 'text') {
+            const textContent = $(contentNode).text().trim();
+            const advocateMatch = textContent.match(/Advocate\s*-\s*(.*)/i);
+            if (advocateMatch) {
+                advocate = advocateMatch[1].trim();
+                return false; // Stop iterating once advocate is found
             }
-        });
-        caseDetails.respondents = respondents;
+        }
+    });
+
+    respondents.push({
+        name: name,
+        advocate: advocate
+    });
+});
+caseDetails.respondents = respondents;
 
         // Parse Acts Section
         const actsTable = $('div.border.box.bg-white').nextAll('div').first().find('table'); // Assumed structure based on screenshot
