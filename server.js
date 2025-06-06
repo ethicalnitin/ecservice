@@ -3,15 +3,14 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
-const { URLSearchParams } = require('url'); // Needed for /api/case-data and /api/case-details-by-cino
+const { URLSearchParams } = require('url');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Middleware
-app.use(cors({ // More specific CORS configuration if needed by your frontend
-    origin: ['https://verdant-cucurucho-13134b.netlify.app', 'https://jr-portal.vercel.app', 'http://localhost:3000', 'http://localhost:3002'], // Added your common frontends
-    credentials: true,
+
+app.use(cors({
+    origin: ['https://verdant-cucurucho-13134b.netlify.app', 'https://jr-portal.vercel.app', 'http://localhost:3000', 'http://localhost:3002'],
     methods: ['GET', 'POST', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'Origin', 'X-Requested-With', 'Accept', 'Cookie']
 }));
@@ -19,30 +18,31 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
-// Function to extract cookies from a frontend request (from your original code)
+const casenumberRoutes = require('./routes/casenumber'); // Make sure this path is correct
+
+
+app.use('/api/casenumber', casenumberRoutes);
+
+
 const getCookiesFromRequest = (req) => {
     return req.body.cookies || req.headers.cookie || '';
 };
 
-// Helper function to format cookies for the 'Cookie' header (from definitive approach)
-// This handles both array of cookie strings and a single cookie string.
+
 const getCookiesForHeader = (cookiesInput) => {
     if (Array.isArray(cookiesInput)) {
         return cookiesInput.map(cookieString => {
             const parts = cookieString.split(';');
-            return parts[0].trim(); // Get only the name=value part
+            return parts[0].trim();
         }).join('; ');
     }
     if (typeof cookiesInput === 'string') {
-        // If it's already a string, assume it's correctly formatted or a single cookie part
         return cookiesInput;
     }
-    return ''; // Fallback for null/undefined or other types
+    return '';
 };
 
-// ===============================================
-// New function: Replicate siwp_genid() for client-side SCID generation (from definitive approach)
-// ===============================================
+
 function generateSecurimageCaptchaId() {
     let cid = '';
     const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
@@ -54,14 +54,14 @@ function generateSecurimageCaptchaId() {
 
 app.post('/api/states', async (req, res) => {
     try {
-        const cookiesFromClient = getCookiesFromRequest(req); // Get cookies from frontend payload/header
+        const cookiesFromClient = getCookiesFromRequest(req);
 
         const response = await axios.get('https://ecourts.gov.in/ecourts_home/index.php', {
             headers: {
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.5',
                 'Cache-Control': 'max-age=0',
-                'Cookie': getCookiesForHeader(cookiesFromClient), // Use helper for consistent formatting
+                'Cookie': getCookiesForHeader(cookiesFromClient),
                 'Priority': 'u=0, i',
                 'Sec-Ch-Ua': '"Chromium";v="136", "Brave";v="136", "Not.A/Brand";v="99"',
                 'Sec-Ch-Ua-Mobile': '?0',
@@ -98,7 +98,7 @@ app.post('/api/states', async (req, res) => {
 app.post('/api/districts', async (req, res) => {
     const { stateLink, cookies } = req.body;
 
-    if (!stateLink) { // Removed !cookies check, as initial call might not have specific cookies yet
+    if (!stateLink) {
         return res.status(400).json({ error: 'State link is required' });
     }
 
@@ -107,7 +107,7 @@ app.post('/api/districts', async (req, res) => {
             headers: {
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.5',
-                'Cookie': getCookiesForHeader(cookies), // Use helper
+                'Cookie': getCookiesForHeader(cookies),
                 'Priority': 'u=0, i',
                 'Referer': 'https://ecourts.gov.in/',
                 'Sec-Ch-Ua': '"Chromium";v="136", "Brave";v="136", "Not.A/Brand";v="99"',
@@ -129,8 +129,7 @@ app.post('/api/districts', async (req, res) => {
             const link = $(element).attr('href');
             const name = $(element).text().trim();
             if (link && link.includes('.dcourts.gov.in') && name.length > 2) {
-                // Ensure districtLink ends with a slash for consistency if needed by later logic
-                const districtFullLink = link.startsWith('http') ? link : `https://${link}`; // Assume https
+                const districtFullLink = link.startsWith('http') ? link : `https://${link}`;
                 districts.push({ name, link: districtFullLink.endsWith('/') ? districtFullLink : `${districtFullLink}/` });
             }
         });
@@ -144,31 +143,29 @@ app.post('/api/districts', async (req, res) => {
     }
 });
 
-// ===============================================
-// Updated /api/court-details endpoint
-// ===============================================
+
 app.post('/api/court-details', async (req, res) => {
-    const { districtLink, cookies } = req.body; // cookies expected as an array of strings or a string
+    const { districtLink, cookies } = req.body;
 
     if (!districtLink) {
         return res.status(400).json({ error: 'District link is required' });
     }
 
-    // Ensure districtLink ends with a slash for consistency
     const baseDistrictUrl = districtLink.endsWith('/') ? districtLink : `${districtLink}/`;
+    // Default to petitioner/respondent page for initial token/captcha scraping
     const caseStatusUrl = `${baseDistrictUrl}case-status-search-by-petitioner-respondent/`;
+
 
     console.log(`[Initial Load] Attempting to fetch: ${caseStatusUrl}`);
     console.log(`[Initial Load] Sending cookies: ${getCookiesForHeader(cookies)}`);
 
     try {
-        // Headers from "definitive approach" for this specific interaction
         const headers = {
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.7',
             'Cache-Control': 'no-cache, no-store, must-revalidate',
-            'Pragma': 'no-cache', // For older HTTP/1.0 proxies
-            'Expires': '0', // Ensures no caching
+            'Pragma': 'no-cache',
+            'Expires': '0',
             'Connection': 'keep-alive',
             'Cookie': getCookiesForHeader(cookies),
             'Referer': baseDistrictUrl,
@@ -178,7 +175,6 @@ app.post('/api/court-details', async (req, res) => {
             'Sec-Fetch-User': '?1',
             'Sec-Gpc': '1',
             'Upgrade-Insecure-Requests': '1',
-            // User-Agent from definitive example for Securimage interaction consistency
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'sec-ch-ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
             'sec-ch-ua-mobile': '?0',
@@ -188,36 +184,33 @@ app.post('/api/court-details', async (req, res) => {
         const response = await axios.get(caseStatusUrl, { headers });
         const $ = cheerio.load(response.data);
 
-        // Use more specific selectors for scid and token
         const scid = $('input#input_siwp_captcha_id_0[name="scid"]').val();
         let appTokenName = null;
         let appTokenValue = null;
         $('input[name^="tok_"]').each((i, el) => {
             appTokenName = $(el).attr('name');
             appTokenValue = $(el).val();
-            return false; // Found the first one, break loop
+            return false;
         });
 
-      const courtComplexes = [];
-const courtEstablishments = [];
+        const courtComplexes = [];
+        const courtEstablishments = [];
 
-// Extract Court Complexes
-$('select#est_code option').each((i, element) => {
-    const value = $(element).val();
-    const name = $(element).text().trim();
-    if (value && name && name.toLowerCase() !== 'select court complex' && name.toLowerCase() !== 'all' && value !== "0") {
-        courtComplexes.push({ name, value });
-    }
-});
+        $('select#est_code option').each((i, element) => {
+            const value = $(element).val();
+            const name = $(element).text().trim();
+            if (value && name && name.toLowerCase() !== 'select court complex' && name.toLowerCase() !== 'all' && value !== "0") {
+                courtComplexes.push({ name, value });
+            }
+        });
 
-// Extract Court Establishments
-$('select#court_establishment option').each((i, element) => {
-    const value = $(element).val();
-    const name = $(element).text().trim();
-    if (value && name && name.toLowerCase() !== 'select court establishment' && name.toLowerCase() !== 'all' && value !== "0") {
-        courtEstablishments.push({ name, value });
-    }
-});
+        $('select#court_establishment option').each((i, element) => {
+            const value = $(element).val();
+            const name = $(element).text().trim();
+            if (value && name && name.toLowerCase() !== 'select court establishment' && name.toLowerCase() !== 'all' && value !== "0") {
+                courtEstablishments.push({ name, value });
+            }
+        });
 
         const setCookies = response.headers['set-cookie'] || [];
 
@@ -228,7 +221,7 @@ $('select#court_establishment option').each((i, element) => {
         console.log('[Initial Load] New cookies received:', setCookies.length ? setCookies : 'None');
 
         res.json({
-            scid: scid || null, // Send null if not found
+            scid: scid || null,
             appTokenName: appTokenName || null,
             appTokenValue: appTokenValue || null,
             courtComplexes,
@@ -246,18 +239,18 @@ $('select#court_establishment option').each((i, element) => {
     }
 });
 
-// ===============================================
-// New /api/refresh-captcha endpoint
-// ===============================================
-app.post('/api/refresh-captcha', async (req, res) => {
-    const { districtBaseUrl, cookies } = req.body; // cookies expected as an array of strings or a string
 
-    if (!districtBaseUrl || !cookies) { // Cookies are essential here
+app.post('/api/refresh-captcha', async (req, res) => {
+    const { districtBaseUrl, cookies } = req.body;
+
+    if (!districtBaseUrl || !cookies) {
         return res.status(400).json({ error: 'District base URL and cookies are required' });
     }
 
     const baseDistrictUrlProper = districtBaseUrl.endsWith('/') ? districtBaseUrl : `${districtBaseUrl}/`;
+    // Default to petitioner/respondent page for referer context during refresh
     const caseStatusSearchUrl = `${baseDistrictUrlProper}case-status-search-by-petitioner-respondent/`;
+
 
     console.log(`[Refresh] Attempting to refresh captcha for: ${baseDistrictUrlProper}`);
     console.log(`[Refresh] Sending initial cookies: ${getCookiesForHeader(cookies)}`);
@@ -270,11 +263,9 @@ app.post('/api/refresh-captcha', async (req, res) => {
     }
 
     try {
-        // --- STEP 1: Generate a new SCID ---
         const newScid = generateSecurimageCaptchaId();
         console.log('[Refresh] Generated new SCID client-side:', newScid);
 
-        // --- STEP 2: Fetch the new captcha image ---
         const captchaImageUrl = `${baseDistrictUrlProper}?_siwp_captcha&id=${newScid}`;
         console.log('[Refresh] Fetching captcha image from:', captchaImageUrl);
 
@@ -285,7 +276,7 @@ app.post('/api/refresh-captcha', async (req, res) => {
                 'Accept-Language': 'en-US,en;q=0.7',
                 'Connection': 'keep-alive',
                 'Cookie': getCookiesForHeader(currentSessionCookiesArray),
-                'Referer': caseStatusSearchUrl,
+                'Referer': caseStatusSearchUrl, // Referer for image fetch
                 'Sec-Fetch-Dest': 'image',
                 'Sec-Fetch-Mode': 'no-cors',
                 'Sec-Fetch-Site': 'same-origin',
@@ -301,7 +292,6 @@ app.post('/api/refresh-captcha', async (req, res) => {
         if (newCookiesFromImage.length > 0) {
             console.log('[Refresh] Cookies from captcha image fetch:', newCookiesFromImage);
             currentSessionCookiesArray.push(...newCookiesFromImage);
-            // Deduplicate cookies, prioritizing later ones
             const cookieMap = new Map();
             currentSessionCookiesArray.forEach(cookieStr => {
                 const name = cookieStr.split('=')[0].trim();
@@ -311,11 +301,10 @@ app.post('/api/refresh-captcha', async (req, res) => {
         }
         const imageBase64 = Buffer.from(captchaImageResponse.data, 'binary').toString('base64');
 
-        // --- STEP 3: Re-fetch the main page to get the latest app token ---
         console.log(`[Refresh] Re-fetching page for token: ${caseStatusSearchUrl}`);
         console.log(`[Refresh] Sending cookies for page re-fetch: ${getCookiesForHeader(currentSessionCookiesArray)}`);
-        
-        const pageResponse = await axios.get(caseStatusSearchUrl, {
+
+        const pageResponse = await axios.get(caseStatusSearchUrl, { // Re-fetch the page
             headers: {
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.7',
@@ -324,7 +313,7 @@ app.post('/api/refresh-captcha', async (req, res) => {
                 'Expires': '0',
                 'Connection': 'keep-alive',
                 'Cookie': getCookiesForHeader(currentSessionCookiesArray),
-                'Referer': baseDistrictUrlProper,
+                'Referer': baseDistrictUrlProper, // Referer for page fetch
                 'Sec-Fetch-Dest': 'document',
                 'Sec-Fetch-Mode': 'navigate',
                 'Sec-Fetch-Site': 'same-origin',
@@ -381,8 +370,7 @@ app.post('/api/refresh-captcha', async (req, res) => {
     }
 });
 
-// This endpoint is for fetching a captcha image if you ALREADY have an SCID.
-// The new /api/refresh-captcha generates a new SCID and fetches the image.
+
 app.post('/api/captcha', async (req, res) => {
     const { districtBaseUrl, scid, cookies } = req.body;
 
@@ -399,13 +387,13 @@ app.post('/api/captcha', async (req, res) => {
                 'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.7',
                 'Connection': 'keep-alive',
-                'Cookie': getCookiesForHeader(cookies), // Use helper
+                'Cookie': getCookiesForHeader(cookies),
                 'Referer': `${properDistrictBaseUrl}case-status-search-by-petitioner-respondent/`,
                 'Sec-Fetch-Dest': 'image',
                 'Sec-Fetch-Mode': 'no-cors',
                 'Sec-Fetch-Site': 'same-origin',
                 'Sec-Gpc': '1',
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36', // Your original UA
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36',
                 'sec-ch-ua': '"Chromium";v="136", "Brave";v="136", "Not.A/Brand";v="99"',
                 'sec-ch-ua-mobile': '?0',
                 'sec-ch-ua-platform': '"Windows"'
@@ -427,6 +415,7 @@ app.post('/api/captcha', async (req, res) => {
 });
 
 
+
 app.post('/api/case-data', async (req, res) => {
     const {
         districtBaseUrl,
@@ -434,15 +423,15 @@ app.post('/api/case-data', async (req, res) => {
         estCode,
         litigantName,
         regYear,
-        caseStatus,
+        caseStatus, // Can be 'P' for Pending, 'D' for Disposed, or 'B' for Both
         scid,
         appTokenName,
         appTokenValue,
         captchaValue
     } = req.body;
 
-    if (!districtBaseUrl || !cookies || !estCode || !litigantName || !regYear || !scid || !appTokenName || !appTokenValue || !captchaValue) {
-        return res.status(400).json({ error: 'Missing required parameters' });
+    if (!districtBaseUrl || !cookies || !estCode || !litigantName || !regYear || !scid || !appTokenName || !appTokenValue || !captchaValue || !caseStatus) {
+        return res.status(400).json({ error: 'Missing required parameters for case data by petitioner' });
     }
 
     const properDistrictBaseUrl = districtBaseUrl.endsWith('/') ? districtBaseUrl : `${districtBaseUrl}/`;
@@ -453,13 +442,13 @@ app.post('/api/case-data', async (req, res) => {
     formData.append('est_code', estCode);
     formData.append('litigant_name', litigantName);
     formData.append('reg_year', regYear);
-    formData.append('case_status', caseStatus);
+    formData.append('case_status', caseStatus); // P, D, or B
     formData.append('scid', scid);
     formData.append(appTokenName, appTokenValue);
     formData.append('siwp_captcha_value', captchaValue);
     formData.append('es_ajax_request', '1');
     formData.append('submit', 'Search');
-    formData.append('action', 'get_parties');
+    formData.append('action', 'get_parties'); // Action for petitioner/respondent search
 
     try {
         const response = await axios.post(ajaxUrl, formData.toString(), {
@@ -468,8 +457,8 @@ app.post('/api/case-data', async (req, res) => {
                 'Accept-Language': 'en-US,en;q=0.7',
                 'Connection': 'keep-alive',
                 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-                'Cookie': getCookiesForHeader(cookies), // Use helper
-                'Origin': properDistrictBaseUrl.slice(0, -1), // Remove trailing slash for Origin
+                'Cookie': getCookiesForHeader(cookies),
+                'Origin': properDistrictBaseUrl.slice(0, -1),
                 'Referer': `${properDistrictBaseUrl}case-status-search-by-petitioner-respondent/`,
                 'Sec-Fetch-Dest': 'empty',
                 'Sec-Fetch-Mode': 'cors',
@@ -484,12 +473,13 @@ app.post('/api/case-data', async (req, res) => {
         });
 
         const externalApiResponse = response.data;
-        const setCookies = response.headers['set-cookie'] || []; // Capture any cookies from this response
+        const setCookies = response.headers['set-cookie'] || [];
 
         if (externalApiResponse.success && typeof externalApiResponse.data === 'string') {
             const htmlContent = externalApiResponse.data;
             const $ = cheerio.load(htmlContent);
             const cases = [];
+            // Adjust selectors if needed based on actual HTML structure
             $('table.data-table-1 tbody tr').each((index, element) => {
                 const serialNumber = $(element).find('td:nth-child(1)').text().trim();
                 const caseTypeNumberYear = $(element).find('td:nth-child(2)').text().trim();
@@ -508,15 +498,27 @@ app.post('/api/case-data', async (req, res) => {
                 });
             });
 
-            // Extract pagination details carefully
-            const paginationElement = $('#UPLK16'); // This ID is likely specific, make it more general or configurable if needed
+            // Pagination parsing - adjust selector if needed (e.g. #UPLK16 might be dynamic)
+            // The ID used for pagination might be linked to est_code or be a generic one.
+            // For Lucknow it was UPLK16. You might need to make this dynamic or use a more generic selector.
+            const paginationElementId = `#${estCode.replace(/[^a-zA-Z0-9]/g, '')}`; // Example: UPLK16
+            const paginationElement = $(paginationElementId); // Or a more generic selector like $('[data-total-cases]')
             let totalCases = null;
             let nextPage = null;
             if (paginationElement.length > 0) {
-                 totalCases = parseInt(paginationElement.attr('data-total-cases'), 10);
-                 nextPage = parseInt(paginationElement.attr('data-next-page'), 10);
-                 if (isNaN(totalCases)) totalCases = null; // Handle NaN
-                 if (isNaN(nextPage)) nextPage = null;   // Handle NaN
+                totalCases = parseInt(paginationElement.attr('data-total-cases'), 10);
+                nextPage = parseInt(paginationElement.attr('data-next-page'), 10);
+                if (isNaN(totalCases)) totalCases = null;
+                if (isNaN(nextPage)) nextPage = null;
+            } else {
+                 // Fallback or alternative parsing if specific ID not found
+                 const genericPagination = $('[data-total-cases]').first();
+                 if(genericPagination.length > 0){
+                    totalCases = parseInt(genericPagination.attr('data-total-cases'), 10);
+                    nextPage = parseInt(genericPagination.attr('data-next-page'), 10);
+                    if (isNaN(totalCases)) totalCases = null;
+                    if (isNaN(nextPage)) nextPage = null;
+                 }
             }
 
 
@@ -525,19 +527,17 @@ app.post('/api/case-data', async (req, res) => {
                 parsedCases: cases,
                 totalCases: totalCases,
                 nextPage: nextPage,
-                setCookies // Pass along any new cookies
+                setCookies
             });
         } else if (externalApiResponse.success === false && typeof externalApiResponse.data === 'string') {
-             // Handle cases like "Invalid Captcha" or "No records found"
-             console.log('[Case Data] Non-success message from external API:', externalApiResponse.data);
-             res.status(400).json({ // Use a 4xx status for client-side type errors from external API
-                error: externalApiResponse.data, // Send the message from the external API
+            console.log('[Case Data by Petitioner] Non-success message from external API:', externalApiResponse.data);
+            res.status(400).json({
+                error: externalApiResponse.data,
                 externalResponse: externalApiResponse,
                 setCookies
             });
-        }
-         else {
-            console.log('[Case Data] External API response format unexpected:', externalApiResponse);
+        } else {
+            console.log('[Case Data by Petitioner] External API response format unexpected:', externalApiResponse);
             res.status(500).json({
                 error: 'External API response was not successful or data format was unexpected.',
                 externalResponse: externalApiResponse,
@@ -545,10 +545,11 @@ app.post('/api/case-data', async (req, res) => {
             });
         }
     } catch (error) {
-        console.error('Error fetching or parsing case data:', error.response ? error.response.data : error.message);
-        res.status(500).json({ error: 'Failed to fetch or parse case data', details: error.message });
+        console.error('Error fetching or parsing case data by petitioner:', error.response ? error.response.data : error.message);
+        res.status(500).json({ error: 'Failed to fetch or parse case data by petitioner', details: error.message });
     }
 });
+
 
 app.post('/api/case-details-by-cino', async (req, res) => {
     const { districtBaseUrl, cookies, cino } = req.body;
@@ -572,9 +573,9 @@ app.post('/api/case-details-by-cino', async (req, res) => {
                 'Accept-Language': 'en-US,en;q=0.7',
                 'Connection': 'keep-alive',
                 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-                'Cookie': getCookiesForHeader(cookies), // Use helper
-                'Origin': properDistrictBaseUrl.slice(0, -1), // Remove trailing slash for Origin
-                'Referer': `${properDistrictBaseUrl}case-status-search-by-petitioner-respondent/`,
+                'Cookie': getCookiesForHeader(cookies),
+                'Origin': properDistrictBaseUrl.slice(0, -1),
+                'Referer': `${properDistrictBaseUrl}case-status-search-by-petitioner-respondent/`, // Or other relevant referer page if needed
                 'Sec-Fetch-Dest': 'empty',
                 'Sec-Fetch-Mode': 'cors',
                 'Sec-Fetch-Site': 'same-origin',
@@ -586,15 +587,14 @@ app.post('/api/case-details-by-cino', async (req, res) => {
                 'sec-ch-ua-platform': '"Windows"'
             }
         });
-        
-        const setCookies = response.headers['set-cookie'] || []; // Capture cookies
+
+        const setCookies = response.headers['set-cookie'] || [];
 
         if (response.data && response.data.success && typeof response.data.data === 'string') {
             const htmlData = response.data.data;
             const $ = cheerio.load(htmlData);
             const caseDetails = {};
 
-            // Helper to parse tables with headers and values into an object
             const parseTableToObject = (tableElement) => {
                 const obj = {};
                 if (tableElement.length) {
@@ -607,15 +607,14 @@ app.post('/api/case-details-by-cino', async (req, res) => {
                         values.push($(el).text().trim());
                     });
                     headers.forEach((header, index) => {
-                        if (header && values[index] !== undefined) { // Ensure header is not empty
-                           obj[header] = values[index];
+                        if (header && values[index] !== undefined) {
+                            obj[header] = values[index];
                         }
                     });
                 }
                 return obj;
             };
-            
-             // Helper to parse tables with multiple rows into an array of objects
+
             const parseRowsToArray = (tableElement) => {
                 const entries = [];
                 if (tableElement.length) {
@@ -626,7 +625,7 @@ app.post('/api/case-details-by-cino', async (req, res) => {
                     tableElement.find('tbody tr').each((i, row) => {
                         const rowData = {};
                         $(row).find('td').each((j, cell) => {
-                            if (headers[j]) { // Ensure header exists
+                            if (headers[j]) {
                                 rowData[headers[j]] = $(cell).text().trim();
                             }
                         });
@@ -636,10 +635,8 @@ app.post('/api/case-details-by-cino', async (req, res) => {
                 return entries;
             };
 
-
-            // Parse Case Details and Case Status Tables
             Object.assign(caseDetails, parseTableToObject($('.distTableContent table.data-table-1').first()));
-            Object.assign(caseDetails, parseTableToObject($('.distTableContent table.data-table-1').eq(1))); // Second table for status
+            Object.assign(caseDetails, parseTableToObject($('.distTableContent table.data-table-1').eq(1)));
 
             const petitioners = [];
             $('.Petitioner ul li').each((i, el) => {
@@ -670,26 +667,22 @@ app.post('/api/case-details-by-cino', async (req, res) => {
             });
             caseDetails.respondents_and_advocates = respondents;
 
-            // More robust parsing for sections by looking for headings
-            // These selectors might need adjustment based on the exact HTML structure.
-            const sectionsRoot = $('div.distTableContent').parent(); // Common parent or document body
-            
+            const sectionsRoot = $('div.distTableContent').parent();
             caseDetails.acts_and_sections = parseRowsToArray(sectionsRoot.find('h6:contains("Act and Sections")').first().nextUntil('h6', 'div.table-responsive').find('table.data-table-1'));
             caseDetails.fir_details = parseRowsToArray(sectionsRoot.find('h6:contains("FIR Details")').first().nextUntil('h6', 'div.table-responsive').find('table.data-table-1'));
             caseDetails.history_of_case_hearing = parseRowsToArray(sectionsRoot.find('h6:contains("History of Case Hearing")').first().nextUntil('h6', 'div.table-responsive').find('table.data-table-1'));
 
-
             res.json({
                 success: true,
                 caseDetails: caseDetails,
-                setCookies // Pass along any new cookies
+                setCookies
             });
         } else {
             console.error('[CINO Details] External API response format unexpected or success false:', response.data);
-            res.status(500).json({ 
-                error: 'Failed to parse CINO details, unexpected API response format.', 
-                details: response.data, // Send raw data for debugging
-                setCookies 
+            res.status(500).json({
+                error: 'Failed to parse CINO details, unexpected API response format.',
+                details: response.data,
+                setCookies
             });
         }
 
@@ -698,6 +691,7 @@ app.post('/api/case-details-by-cino', async (req, res) => {
         res.status(500).json({ error: 'Failed to fetch or parse case details by CINO', details: error.message });
     }
 });
+
 
 app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
